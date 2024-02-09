@@ -4,6 +4,8 @@ import random
 import timeit
 import os
 
+os.environ['SUMO_HOME'] = "/usr/share/sumo/"
+
 # phase codes based on environment.net.xml
 PHASE_NS_GREEN = 0  # action 0 code 00
 PHASE_NS_YELLOW = 1
