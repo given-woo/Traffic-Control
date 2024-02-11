@@ -20,29 +20,29 @@ if __name__ == "__main__":
     path = set_train_path(config['models_path_name'])
 
     Model = TrainModel(
-        config['num_layers'], 
-        config['width_layers'], 
-        config['batch_size'], 
-        config['learning_rate'], 
-        input_dim=config['num_states'], 
+        config['num_layers'],
+        config['width_layers'],
+        config['batch_size'],
+        config['learning_rate'],
+        input_dim=config['num_states'],
         output_dim=config['num_actions']
     )
 
     Memory = Memory(
-        config['memory_size_max'], 
+        config['memory_size_max'],
         config['memory_size_min']
     )
 
     TrafficGen = TrafficGenerator(
-        config['max_steps'], 
+        config['max_steps'],
         config['n_cars_generated']
     )
 
     Visualization = Visualization(
-        path, 
+        path,
         dpi=96
     )
-        
+
     Simulation = Simulation(
         Model,
         Memory,
@@ -50,16 +50,15 @@ if __name__ == "__main__":
         sumo_cmd,
         config['gamma'],
         config['max_steps'],
-        config['green_duration'],
         config['yellow_duration'],
         config['num_states'],
         config['num_actions'],
         config['training_epochs']
     )
-    
+
     episode = 0
     timestamp_start = datetime.datetime.now()
-    
+
     while episode < config['total_episodes']:
         print('\n----- Episode', str(episode+1), 'of', str(config['total_episodes']))
         epsilon = 1.0 - (episode / config['total_episodes'])  # set the epsilon for this episode according to epsilon-greedy policy

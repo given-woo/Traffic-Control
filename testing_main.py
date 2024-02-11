@@ -23,21 +23,20 @@ if __name__ == "__main__":
     )
 
     TrafficGen = TrafficGenerator(
-        config['max_steps'], 
+        config['max_steps'],
         config['n_cars_generated']
     )
 
     Visualization = Visualization(
-        plot_path, 
+        plot_path,
         dpi=96
     )
-        
+
     Simulation = Simulation(
         Model,
         TrafficGen,
         sumo_cmd,
         config['max_steps'],
-        config['green_duration'],
         config['yellow_duration'],
         config['num_states'],
         config['num_actions']

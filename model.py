@@ -32,9 +32,9 @@ class TrainModel:
         outputs = layers.Dense(self._output_dim, activation='linear')(x)
 
         model = keras.Model(inputs=inputs, outputs=outputs, name='my_model')
-        model.compile(loss=losses.mean_squared_error, optimizer=Adam(lr=self._learning_rate))
+        model.compile(loss=losses.mean_squared_error, optimizer=Adam(learning_rate=self._learning_rate))
         return model
-    
+
 
     def predict_one(self, state):
         """
@@ -92,7 +92,7 @@ class TestModel:
         Load the model stored in the folder specified by the model number, if it exists
         """
         model_file_path = os.path.join(model_folder_path, 'trained_model.h5')
-        
+
         if os.path.isfile(model_file_path):
             loaded_model = load_model(model_file_path)
             return loaded_model

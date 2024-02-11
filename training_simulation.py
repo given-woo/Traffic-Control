@@ -3,8 +3,12 @@ import numpy as np
 import random
 import timeit
 import os
+import skfuzzy as fuzz
 
-os.environ['SUMO_HOME'] = "/usr/share/sumo/"
+os.environ['SUMO_HOME'] = "/opt/homebrew/opt/sumo/share/sumo/"
+os.environ['PYTHONPATH'] = "/opt/homebrew/opt/sumo/share/sumo/tools"
+os.environ['LIBSUMO_AS_TRACI']='1'
+
 
 # phase codes based on environment.net.xml
 PHASE_NS_GREEN = 0  # action 0 code 00
@@ -18,7 +22,7 @@ PHASE_EWL_YELLOW = 7
 
 
 class Simulation:
-    def __init__(self, Model, Memory, TrafficGen, sumo_cmd, gamma, max_steps, green_duration, yellow_duration, num_states, num_actions, training_epochs):
+    def __init__(self, Model, Memory, TrafficGen, sumo_cmd, gamma, max_steps, yellow_duration, num_states, num_actions, training_epochs):
         self._Model = Model
         self._Memory = Memory
         self._TrafficGen = TrafficGen
@@ -26,7 +30,6 @@ class Simulation:
         self._step = 0
         self._sumo_cmd = sumo_cmd
         self._max_steps = max_steps
-        self._green_duration = green_duration
         self._yellow_duration = yellow_duration
         self._num_states = num_states
         self._num_actions = num_actions
@@ -60,7 +63,7 @@ class Simulation:
         while self._step < self._max_steps:
 
             # get current state of the intersection
-            current_state = self._get_state()
+            current_state, gp, rp = self._get_state()
 
             # calculate reward of previous action: (change in cumulative waiting time between actions)
             # waiting time = seconds waited by a car since the spawn in the environment, cumulated for every car in incoming lanes
@@ -81,7 +84,7 @@ class Simulation:
 
             # execute the phase selected before
             self._set_green_phase(action)
-            self._simulate(self._green_duration)
+            self._simulate(self._calculate_fuzzy_output(gp, rp))
 
             # saving variables for later & accumulate reward
             old_state = current_state
@@ -121,6 +124,146 @@ class Simulation:
             self._sum_queue_length += queue_length
             self._sum_waiting_time += queue_length # 1 step while wating in queue means 1 second waited, for each car, therefore queue_lenght == waited_seconds
 
+    def _green_phase_roads(self):
+        green_phase_roads = []
+        if traci.trafficlight.getPhase("TL") == PHASE_NS_GREEN:
+            green_phase_roads = ["N2TL", "S2TL"]
+        elif traci.trafficlight.getPhase("TL") == PHASE_EW_GREEN:
+            green_phase_roads = ["E2TL", "W2TL"]
+        elif traci.trafficlight.getPhase("TL") == PHASE_NSL_GREEN:
+            green_phase_roads = ["N2TL", "S2TL", "E2TL", "W2TL"]
+        elif traci.trafficlight.getPhase("TL") == PHASE_EWL_GREEN:
+            green_phase_roads = ["E2TL", "W2TL", "L2TL", "R2TL"]
+        return green_phase_roads
+
+    def _fuzzify_input(self, input_value, input_type):
+        if input_type == 'gp':
+            # Universe of discourse for GP (could be adjusted)
+            universe = np.arange(0, 17)
+
+            # Fuzzy sets (triangular functions)
+            vvf = fuzz.trimf(universe, [0, 0, 2])
+            vf = fuzz.trimf(universe, [0, 2, 4])
+            f = fuzz.trimf(universe, [2, 4, 8])
+            av = fuzz.trimf(universe, [4, 8, 12])
+            m = fuzz.trimf(universe, [8, 12, 14])
+            vm = fuzz.trimf(universe, [12, 14, 17])
+            vvm = fuzz.trimf(universe, [14, 17, 17])
+
+            # Fuzzification
+            vvf_membership = fuzz.interp_membership(universe, vvf, input_value)
+            vf_membership = fuzz.interp_membership(universe, vf, input_value)
+            f_membership = fuzz.interp_membership(universe, f, input_value)
+            av_membership = fuzz.interp_membership(universe, av, input_value)
+            m_membership = fuzz.interp_membership(universe, m, input_value)
+            vm_membership = fuzz.interp_membership(universe, vm, input_value)
+            vvm_membership = fuzz.interp_membership(universe, vvm, input_value)
+
+            memberships = [vvf_membership, vf_membership, f_membership, av_membership, m_membership, vm_membership, vvm_membership]
+            if memberships == [0., 0., 0., 0., 0., 0., 0.]:
+                memberships[6]=1.
+            return memberships
+        elif input_type == 'rp':
+            # Universe of discourse for RP (could be adjusted)
+            universe = np.arange(0, 48)
+
+            # Fuzzy sets (triangular functions)
+            vvf = fuzz.trimf(universe, [0, 0, 6])
+            vf = fuzz.trimf(universe, [0, 6, 12])
+            f = fuzz.trimf(universe, [6, 12, 24])
+            av = fuzz.trimf(universe, [12, 24, 36])
+            m = fuzz.trimf(universe, [24, 36, 42])
+            vm = fuzz.trimf(universe, [36, 42, 48])
+            vvm = fuzz.trimf(universe, [42, 48, 48])
+
+            # Fuzzification
+            vvf_membership = fuzz.interp_membership(universe, vvf, input_value)
+            vf_membership = fuzz.interp_membership(universe, vf, input_value)
+            f_membership = fuzz.interp_membership(universe, f, input_value)
+            av_membership = fuzz.interp_membership(universe, av, input_value)
+            m_membership = fuzz.interp_membership(universe, m, input_value)
+            vm_membership = fuzz.interp_membership(universe, vm, input_value)
+            vvm_membership = fuzz.interp_membership(universe, vvm, input_value)
+
+            memberships = [vvf_membership, vf_membership, f_membership, av_membership, m_membership, vm_membership, vvm_membership]
+            if memberships == [0., 0., 0., 0., 0., 0., 0.]:
+                memberships[6]=1.
+            return memberships
+
+    def _calculate_fuzzy_output(self, gp, rp):
+        fuzzy_gp = self._fuzzify_input(gp, 'gp')
+        fuzzy_rp = self._fuzzify_input(rp, 'rp')
+
+        # Universe of discourse for the output (could be adjusted)
+        universe = np.arange(0, 35)
+
+        vvf = fuzz.trimf(universe, [0, 0, 5])
+        vf = fuzz.trimf(universe, [0, 5, 10])
+        f = fuzz.trimf(universe, [5, 10, 15])
+        av = fuzz.trimf(universe, [10, 15, 25])
+        m = fuzz.trimf(universe, [15, 25, 30])
+        vm = fuzz.trimf(universe, [25, 30, 35])
+        vvm = fuzz.trimf(universe, [30, 35, 35])
+
+        # Fuzzy rules
+        rules = []
+        rules.append(np.fmin(np.fmax(fuzzy_gp[0], fuzzy_rp[0]), av))
+        rules.append(np.fmin(np.fmax(fuzzy_gp[0], fuzzy_rp[1]), f))
+        rules.append(np.fmin(np.fmax(fuzzy_gp[0], fuzzy_rp[2]), f))
+        rules.append(np.fmin(np.fmax(fuzzy_gp[0], fuzzy_rp[3]), vf))
+        rules.append(np.fmin(np.fmax(fuzzy_gp[0], fuzzy_rp[4]), vf))
+        rules.append(np.fmin(np.fmax(fuzzy_gp[0], fuzzy_rp[5]), vvf))
+        rules.append(np.fmin(np.fmax(fuzzy_gp[0], fuzzy_rp[6]), vvf))
+        rules.append(np.fmin(np.fmax(fuzzy_gp[1], fuzzy_rp[0]), m))
+        rules.append(np.fmin(np.fmax(fuzzy_gp[1], fuzzy_rp[1]), av))
+        rules.append(np.fmin(np.fmax(fuzzy_gp[1], fuzzy_rp[2]), f))
+        rules.append(np.fmin(np.fmax(fuzzy_gp[1], fuzzy_rp[3]), f))
+        rules.append(np.fmin(np.fmax(fuzzy_gp[1], fuzzy_rp[4]), vf))
+        rules.append(np.fmin(np.fmax(fuzzy_gp[1], fuzzy_rp[5]), vf))
+        rules.append(np.fmin(np.fmax(fuzzy_gp[1], fuzzy_rp[6]), vvf))
+        rules.append(np.fmin(np.fmax(fuzzy_gp[2], fuzzy_rp[0]), m))
+        rules.append(np.fmin(np.fmax(fuzzy_gp[2], fuzzy_rp[1]), m))
+        rules.append(np.fmin(np.fmax(fuzzy_gp[2], fuzzy_rp[2]), av))
+        rules.append(np.fmin(np.fmax(fuzzy_gp[2], fuzzy_rp[3]), f))
+        rules.append(np.fmin(np.fmax(fuzzy_gp[2], fuzzy_rp[4]), f))
+        rules.append(np.fmin(np.fmax(fuzzy_gp[2], fuzzy_rp[5]), vf))
+        rules.append(np.fmin(np.fmax(fuzzy_gp[2], fuzzy_rp[6]), vf))
+        rules.append(np.fmin(np.fmax(fuzzy_gp[3], fuzzy_rp[0]), vm))
+        rules.append(np.fmin(np.fmax(fuzzy_gp[3], fuzzy_rp[1]), m))
+        rules.append(np.fmin(np.fmax(fuzzy_gp[3], fuzzy_rp[2]), m))
+        rules.append(np.fmin(np.fmax(fuzzy_gp[3], fuzzy_rp[3]), av))
+        rules.append(np.fmin(np.fmax(fuzzy_gp[3], fuzzy_rp[4]), f))
+        rules.append(np.fmin(np.fmax(fuzzy_gp[3], fuzzy_rp[5]), f))
+        rules.append(np.fmin(np.fmax(fuzzy_gp[3], fuzzy_rp[6]), vf))
+        rules.append(np.fmin(np.fmax(fuzzy_gp[4], fuzzy_rp[0]), vm))
+        rules.append(np.fmin(np.fmax(fuzzy_gp[4], fuzzy_rp[1]), vm))
+        rules.append(np.fmin(np.fmax(fuzzy_gp[4], fuzzy_rp[2]), m))
+        rules.append(np.fmin(np.fmax(fuzzy_gp[4], fuzzy_rp[3]), m))
+        rules.append(np.fmin(np.fmax(fuzzy_gp[4], fuzzy_rp[4]), av))
+        rules.append(np.fmin(np.fmax(fuzzy_gp[4], fuzzy_rp[5]), f))
+        rules.append(np.fmin(np.fmax(fuzzy_gp[4], fuzzy_rp[6]), f))
+        rules.append(np.fmin(np.fmax(fuzzy_gp[5], fuzzy_rp[0]), vvm))
+        rules.append(np.fmin(np.fmax(fuzzy_gp[5], fuzzy_rp[1]), vm))
+        rules.append(np.fmin(np.fmax(fuzzy_gp[5], fuzzy_rp[2]), vm))
+        rules.append(np.fmin(np.fmax(fuzzy_gp[5], fuzzy_rp[3]), m))
+        rules.append(np.fmin(np.fmax(fuzzy_gp[5], fuzzy_rp[4]), m))
+        rules.append(np.fmin(np.fmax(fuzzy_gp[5], fuzzy_rp[5]), av))
+        rules.append(np.fmin(np.fmax(fuzzy_gp[5], fuzzy_rp[6]), f))
+        rules.append(np.fmin(np.fmax(fuzzy_gp[6], fuzzy_rp[0]), vvm))
+        rules.append(np.fmin(np.fmax(fuzzy_gp[6], fuzzy_rp[1]), vvm))
+        rules.append(np.fmin(np.fmax(fuzzy_gp[6], fuzzy_rp[2]), vm))
+        rules.append(np.fmin(np.fmax(fuzzy_gp[6], fuzzy_rp[3]), vm))
+        rules.append(np.fmin(np.fmax(fuzzy_gp[6], fuzzy_rp[4]), m))
+        rules.append(np.fmin(np.fmax(fuzzy_gp[6], fuzzy_rp[5]), m))
+        rules.append(np.fmin(np.fmax(fuzzy_gp[6], fuzzy_rp[6]), av))
+
+        aggregated = np.zeros_like(universe) # Array same size as output universe
+        for rule in rules:
+            aggregated = np.fmax(aggregated, rule)  #  Update with max from each rule
+        final = fuzz.defuzz(universe, aggregated, 'centroid')
+
+        return final
+
 
     def _collect_waiting_times(self):
         """
@@ -135,7 +278,7 @@ class Simulation:
                 self._waiting_times[car_id] = wait_time
             else:
                 if car_id in self._waiting_times: # a car that was tracked has cleared the intersection
-                    del self._waiting_times[car_id] 
+                    del self._waiting_times[car_id]
         total_waiting_time = sum(self._waiting_times.values())
         return total_waiting_time
 
@@ -183,12 +326,13 @@ class Simulation:
         queue_length = halt_N + halt_S + halt_E + halt_W
         return queue_length
 
-
     def _get_state(self):
         """
         Retrieve the state of the intersection from sumo, in the form of cell occupancy
         """
         state = np.zeros(self._num_states)
+        gp=0;
+        rp=0;
         car_list = traci.vehicle.getIDList()
 
         for car_id in car_list:
@@ -218,7 +362,7 @@ class Simulation:
             elif lane_pos <= 750:
                 lane_cell = 9
 
-            # finding the lane where the car is located 
+            # finding the lane where the car is located
             # x2TL_3 are the "turn left only" lanes
             if lane_id == "W2TL_0" or lane_id == "W2TL_1" or lane_id == "W2TL_2":
                 lane_group = 0
@@ -250,8 +394,12 @@ class Simulation:
 
             if valid_car:
                 state[car_position] = 1  # write the position of the car car_id in the state array in the form of "cell occupied"
+                if lane_id[0:-2] in self._green_phase_roads():
+                    gp+=1
+                else:
+                    rp+=1
 
-        return state
+        return state, gp, rp
 
 
     def _replay(self):
@@ -304,4 +452,3 @@ class Simulation:
     @property
     def avg_queue_length_store(self):
         return self._avg_queue_length_store
-
